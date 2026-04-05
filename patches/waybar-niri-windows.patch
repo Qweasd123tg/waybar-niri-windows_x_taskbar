@@ -558,7 +558,7 @@ index 687ed8a..60cf9ba 100644
  
  func (*Instance) connectRealize(windowBox gtk.IWidget) {
 diff --git a/niri/niri_state.go b/niri/niri_state.go
-index c8e7853..1164541 100644
+index c8e7853..d11be7d 100644
 --- a/niri/niri_state.go
 +++ b/niri/niri_state.go
 @@ -21,6 +21,12 @@ type State struct {
@@ -601,7 +601,18 @@ index c8e7853..1164541 100644
  	}()
  
  	s.mu.Lock()
-@@ -209,64 +219,45 @@ func (s *State) Text(monitor string, symbols Symbols) string {
+@@ -158,6 +168,10 @@ func (s *State) Update(event Event) {
+ 		s.needsRedraw = true
+ 		for _, change := range event.Changes {
+ 			window := s.windows[change.Id]
++			if window == nil {
++				log.Warnf("window layout changed for unknown window %d", change.Id)
++				continue
++			}
+ 			window.Layout = change.WindowLayout
+ 			if window.WorkspaceId != nil && *window.WorkspaceId == s.currentWorkspaceId {
+ 				log.Tracef("  window layout on current workspace changed: %d", change.Id)
+@@ -209,64 +223,45 @@ func (s *State) Text(monitor string, symbols Symbols) string {
  	s.mu.RLock()
  	defer s.mu.RUnlock()
  
@@ -691,7 +702,7 @@ index c8e7853..1164541 100644
  
  	var output strings.Builder
  	for i := 1; i <= int(maxColumn); i++ {
-@@ -305,53 +296,154 @@ func (s *State) Windows(monitor string) (tiled []*Window, floating []*Window) {
+@@ -305,53 +300,154 @@ func (s *State) Windows(monitor string) (tiled []*Window, floating []*Window) {
  	s.mu.RLock()
  	defer s.mu.RUnlock()
  
@@ -772,11 +783,11 @@ index c8e7853..1164541 100644
 +		if workspace.Output == nil || *workspace.Output != monitor {
 +			continue
  		}
-+		workspaces = append(workspaces, workspace)
- 	}
+-	}
 -	if targetWorkspaceId == None {
 -		return nil, nil
--	}
++		workspaces = append(workspaces, workspace)
+ 	}
  
 +	slices.SortFunc(workspaces, func(a, b *Workspace) int {
 +		if a.Index != b.Index {
@@ -877,10 +888,10 @@ index c8e7853..1164541 100644
  }
 diff --git a/module/icon.go b/module/icon.go
 new file mode 100644
-index 0000000..7967342
+index 0000000..951b0d7
 --- /dev/null
 +++ b/module/icon.go
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,234 @@
 +package module
 +
 +import (
@@ -889,7 +900,6 @@ index 0000000..7967342
 +	"sync"
 +	"wnw/log"
 +
-+	"github.com/gotk3/gotk3/gdk"
 +	"github.com/gotk3/gotk3/gtk"
 +)
 +
@@ -972,7 +982,7 @@ index 0000000..7967342
 +	}
 +
 +	if strings.HasPrefix(resolved, "/") {
-+		return icon{kind: iconFile, value: resolved}, true
++		return fallbackIcon()
 +	}
 +
 +	if iconName, ok := resolveThemeIcon(resolved); ok {
@@ -1055,38 +1065,24 @@ index 0000000..7967342
 +		return nil, fmt.Errorf("invalid icon size %d", size)
 +	}
 +
-+	scale := windowBox.GetScaleFactor()
-+	if scale < 1 {
-+		scale = 1
-+	}
-+
 +	var (
-+		pixbuf *gdk.Pixbuf
-+		err    error
++		image *gtk.Image
++		err   error
 +	)
 +
 +	switch s.kind {
 +	case iconTheme:
-+		theme, themeErr := gtk.IconThemeGetDefault()
-+		if themeErr != nil {
-+			return nil, themeErr
-+		}
-+
-+		pixbuf, err = theme.LoadIconForScale(s.value, size, scale, gtk.ICON_LOOKUP_FORCE_SIZE)
-+		if err != nil {
-+			pixbuf, err = theme.LoadIcon(s.value, size*scale, gtk.ICON_LOOKUP_FORCE_SIZE)
++		image, err = gtk.ImageNew()
++		if err == nil {
++			image.SetFromIconName(s.value, gtk.ICON_SIZE_MENU)
++			image.SetPixelSize(size)
 +		}
 +	case iconFile:
-+		pixbuf, err = gdk.PixbufNewFromFileAtScale(s.value, size*scale, size*scale, true)
++		return nil, fmt.Errorf("file-based icons are disabled for stability")
 +	default:
 +		return nil, fmt.Errorf("unsupported icon kind %d", s.kind)
 +	}
 +
-+	if err != nil {
-+		return nil, err
-+	}
-+
-+	image, err := gtk.ImageNewFromPixbuf(pixbuf)
 +	if err != nil {
 +		return nil, err
 +	}
