@@ -1,0 +1,25 @@
+This repository is a hybrid project assembled from two upstream MIT-licensed
+projects and local modifications.
+
+Upstream sources:
+
+- calico32/waybar-niri-windows
+  https://github.com/calico32/waybar-niri-windows
+  Used as the base for the niri window minimap Waybar CFFI module.
+
+- LawnGnome/niri-taskbar
+  https://github.com/lawngnome/niri-taskbar
+  Used as the reference for desktop entry based app icon lookup and taskbar-style
+  icon handling.
+
+Local modifications in this repository include:
+
+- icon rendering inside minimap tiles
+- fallback generic executable icons
+- all-workspaces minimap mode
+- build/install scripts and repository-local cache layout
+
+Original upstream license texts are preserved in:
+
+- licenses/waybar-niri-windows.MIT
+- licenses/niri-taskbar.MIT

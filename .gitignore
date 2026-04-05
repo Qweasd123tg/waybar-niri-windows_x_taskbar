@@ -1,0 +1,9 @@
+.cache/
+.codex
+dist/
+test-install/
+vendor/
+
+vendor/**/.git.upstream/
+
+*.log

@@ -1,0 +1,37 @@
+{
+  "modules-left": [
+    "cffi/niri-windows",
+    "cffi/niri-taskbar"
+  ],
+
+  "cffi/niri-windows": {
+    "module_path": "/path/to/repo/dist/waybar-niri-windows.so",
+    "options": {
+      "mode": "graphical",
+      "workspace-scope": "all",
+      "show-floating": "auto",
+      "floating-position": "right",
+      "minimum-size": 1,
+      "spacing": 1,
+      "icon-minimum-size": 1,
+      "on-tile-click": "FocusWindow",
+      "on-tile-middle-click": "CloseWindow",
+      "rules": [
+        { "app-id": "firefox", "class": "firefox" },
+        { "app-id": "brave-browser", "class": "brave" },
+        { "app-id": "org.gnome.nautilus", "class": "nautilus" },
+        { "app-id": "org.gnome.ptyxis", "class": "terminal" }
+      ]
+    },
+    "actions": {
+      "on-scroll-up": "FocusColumnLeft",
+      "on-scroll-down": "FocusColumnRight"
+    }
+  },
+
+  // Отдельный taskbar теперь опционален.
+  // Оставляй его, только если хочешь рядом отдельный ряд иконок.
+  "cffi/niri-taskbar": {
+    "module_path": "/path/to/repo/dist/libniri_taskbar.so"
+  }
+}
