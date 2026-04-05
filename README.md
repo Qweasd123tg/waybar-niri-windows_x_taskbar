@@ -2,6 +2,8 @@
 
 Hybrid Waybar module for [niri](https://github.com/YaLTeR/niri): a window minimap based on `cffi/niri-windows`, extended with automatic app icon rendering, all-workspaces minimap mode, and local build/install scripts.
 
+![Hybrid minimap screenshot](screenshot.png)
+
 ## Attribution
 
 This repository is built on top of:
