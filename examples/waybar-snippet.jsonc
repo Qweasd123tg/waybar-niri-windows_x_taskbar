@@ -1,8 +1,5 @@
 {
-  "modules-left": [
-    "cffi/niri-windows",
-    "cffi/niri-taskbar"
-  ],
+  "modules-left": ["cffi/niri-windows"],
 
   "cffi/niri-windows": {
     "module_path": "/path/to/repo/dist/waybar-niri-windows.so",
@@ -20,18 +17,18 @@
         { "app-id": "firefox", "class": "firefox" },
         { "app-id": "brave-browser", "class": "brave" },
         { "app-id": "org.gnome.nautilus", "class": "nautilus" },
-        { "app-id": "org.gnome.ptyxis", "class": "terminal" }
-      ]
+        { "app-id": "org.gnome.ptyxis", "class": "terminal" },
+      ],
     },
     "actions": {
       "on-scroll-up": "FocusColumnLeft",
-      "on-scroll-down": "FocusColumnRight"
-    }
+      "on-scroll-down": "FocusColumnRight",
+    },
   },
 
-  // Отдельный taskbar теперь опционален.
-  // Оставляй его, только если хочешь рядом отдельный ряд иконок.
+  // Optional standalone taskbar.
+  // Add "cffi/niri-taskbar" to modules-left only if you want a separate icon row.
   "cffi/niri-taskbar": {
-    "module_path": "/path/to/repo/dist/libniri_taskbar.so"
-  }
+    "module_path": "/path/to/repo/dist/libniri_taskbar.so",
+  },
 }

@@ -2,6 +2,8 @@
 
 Hybrid Waybar module for [niri](https://github.com/YaLTeR/niri): a window minimap based on `cffi/niri-windows`, extended with automatic app icon rendering, all-workspaces minimap mode, and local build/install scripts.
 
+This project is currently tested primarily on Fedora 43.
+
 ![Hybrid minimap screenshot](screenshot.png)
 
 ## Attribution
@@ -20,6 +22,7 @@ Local changes in this repository add:
 - packaging that keeps build caches inside the repository directory
 
 Upstream sources are fetched during build from pinned commits listed in [`UPSTREAMS.md`](UPSTREAMS.md).
+The effective local behavior of the hybrid module lives in [`patches/waybar-niri-windows.patch`](patches/waybar-niri-windows.patch), which is applied during build.
 
 ## Repository Layout
 
@@ -36,7 +39,8 @@ Upstream sources are fetched during build from pinned commits listed in [`UPSTRE
 - app icons rendered inside tiles
 - fallback to a generic executable icon when app-specific icons are missing
 - all-workspaces minimap mode inside a single module
-- optional standalone `cffi/niri-taskbar` alongside the hybrid minimap
+- self-contained hybrid module for the normal setup
+- optional standalone `cffi/niri-taskbar` only as a companion module
 
 ## Requirements
 
@@ -89,7 +93,7 @@ During build, upstream sources are fetched from their original repositories and 
 
 ## Install
 
-Install built modules into `~/.config/waybar/`:
+Install the hybrid minimap module into `~/.config/waybar/`:
 
 ```bash
 ./install.sh
@@ -101,7 +105,23 @@ Install and restart Waybar:
 ./install.sh --restart-waybar
 ```
 
+Install the optional standalone taskbar too:
+
+```bash
+./install.sh --with-taskbar
+```
+
+Install everything and restart Waybar:
+
+```bash
+./install.sh --with-taskbar --restart-waybar
+```
+
 The installer creates backups in `~/.config/waybar/backups/`.
+
+Test status:
+
+- the current build/install flow is tested primarily on Fedora 43
 
 ## Waybar Configuration
 
@@ -116,6 +136,7 @@ Important options:
 
 - `"icon-minimum-size": 1` allows icons to render in very small tiles
 - `"workspace-scope": "all"` shows all workspaces as separate minimaps inside one module
+- `"workspace-scope": "active"` is the simplest fallback if your local Waybar/GTK setup exposes layout quirks in all-workspaces mode
 
 You can either point Waybar directly to the local build artifacts:
 
@@ -132,7 +153,9 @@ or to installed copies in `~/.config/waybar/`:
 ## Notes
 
 - The hybrid icon logic means `cffi/niri-taskbar` is no longer required for icons inside `cffi/niri-windows`.
+- `install.sh` installs only `waybar-niri-windows.so` by default. Add `--with-taskbar` if you also want the standalone taskbar module copied into `~/.config/waybar/`.
 - The standalone `cffi/niri-taskbar` can still be kept if you want a separate row of app icons next to the minimap.
+- `workspace-scope: "all"` works, but it is still the most actively evolving mode. If your local GTK/Waybar setup exposes layout quirks, try `workspace-scope: "active"` as a fallback.
 - If you move this repository, update `module_path` in your Waybar config.
 
 ## License

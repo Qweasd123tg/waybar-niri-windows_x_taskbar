@@ -41,10 +41,10 @@ index 1b6054a..85d2b50 100644
  const (
 diff --git a/module/icon.go b/module/icon.go
 new file mode 100644
-index 0000000..951b0d7
+index 0000000..b3a029b
 --- /dev/null
 +++ b/module/icon.go
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,265 @@
 +package module
 +
 +import (
@@ -218,26 +218,31 @@ index 0000000..951b0d7
 +		return nil, fmt.Errorf("invalid icon size %d", size)
 +	}
 +
-+	var (
-+		image *gtk.Image
-+		err   error
-+	)
++	image, err := gtk.ImageNew()
++	if err != nil {
++		return nil, err
++	}
++
++	if err := s.Apply(image, size); err != nil {
++		return nil, err
++	}
++
++	return image, nil
++}
++
++func (s icon) Apply(image *gtk.Image, size int) error {
++	if size < 1 {
++		return fmt.Errorf("invalid icon size %d", size)
++	}
 +
 +	switch s.kind {
 +	case iconTheme:
-+		image, err = gtk.ImageNew()
-+		if err == nil {
-+			image.SetFromIconName(s.value, gtk.ICON_SIZE_MENU)
-+			image.SetPixelSize(size)
-+		}
++		image.SetFromIconName(s.value, gtk.ICON_SIZE_MENU)
++		image.SetPixelSize(size)
 +	case iconFile:
-+		return nil, fmt.Errorf("file-based icons are disabled for stability")
++		return fmt.Errorf("file-based icons are disabled for stability")
 +	default:
-+		return nil, fmt.Errorf("unsupported icon kind %d", s.kind)
-+	}
-+
-+	if err != nil {
-+		return nil, err
++		return fmt.Errorf("unsupported icon kind %d", s.kind)
 +	}
 +
 +	image.SetSizeRequest(size, size)
@@ -250,7 +255,7 @@ index 0000000..951b0d7
 +		style.AddClass("app-icon")
 +	}
 +
-+	return image, nil
++	return nil
 +}
 +
 +func iconImage(icon icon, windowBox *gtk.Widget, size int) *gtk.Image {
@@ -278,6 +283,32 @@ index 0000000..951b0d7
 +	}
 +
 +	return image
++}
++
++func setIconImage(image *gtk.Image, icon icon, size int) bool {
++	if icon.kind == iconMissing {
++		fallback, ok := fallbackIcon()
++		if !ok {
++			return false
++		}
++		icon = fallback
++	}
++
++	if err := icon.Apply(image, size); err == nil {
++		return true
++	}
++
++	fallback, ok := fallbackIcon()
++	if !ok || (icon.kind == fallback.kind && icon.value == fallback.value) {
++		return false
++	}
++
++	if err := fallback.Apply(image, size); err != nil {
++		log.Warnf("error creating icon image: %s", err)
++		return false
++	}
++
++	return true
 +}
 diff --git a/module/icon_lookup.go b/module/icon_lookup.go
 new file mode 100644
@@ -467,7 +498,7 @@ index 0000000..ac6c79e
 +	return C.GoString(resolved), true
 +}
 diff --git a/module/module.go b/module/module.go
-index 687ed8a..1e7b21b 100644
+index 687ed8a..3ca53d0 100644
 --- a/module/module.go
 +++ b/module/module.go
 @@ -7,6 +7,7 @@ import (
@@ -478,29 +509,43 @@ index 687ed8a..1e7b21b 100644
  	"sync"
  	"wnw/jsonc"
  	"wnw/log"
-@@ -22,6 +23,7 @@ type Instance struct {
+@@ -22,6 +23,8 @@ type Instance struct {
  	queueUpdate     func()
  	box             *gtk.Box
  	label           *gtk.Label // only set in text mode
 +	workspaceViews  map[uint64]*workspaceView
++	windowContents  map[*gtk.EventBox]*windowContent
  	floatingView    *gtk.Box
  	floatingFixed   *gtk.Fixed
  	monitor         string
-@@ -32,6 +34,13 @@ type Instance struct {
+@@ -32,6 +35,26 @@ type Instance struct {
  	screenWidth     int
  	allocatedHeight int
  	config          Config
 +	iconCache       *iconCache
 +}
 +
++type windowContent struct {
++	box   *gtk.Box
++	label *gtk.Label
++	image *gtk.Image
++}
++
 +type workspaceView struct {
-+	root    *gtk.Box
-+	label   *gtk.Label
-+	content *gtk.Box
++	root          *gtk.Box
++	label         *gtk.Label
++	content       *gtk.Box
++	columns       *gtk.Box
++	floatingView  *gtk.Box
++	floatingFixed *gtk.Fixed
++	empty         *gtk.EventBox
++	columnViews   map[uint32]*gtk.Box
++	windowBoxes   map[uint64]*gtk.EventBox
++	windowParents map[uint64]string
  }
  
  func (i *Instance) Id() uintptr {
-@@ -54,6 +63,7 @@ func New(niriState *niri.State, niriSocket niri.Socket, queueUpdate func()) *Ins
+@@ -54,6 +77,7 @@ func New(niriState *niri.State, niriSocket niri.Socket, queueUpdate func()) *Ins
  		niriSocket:  niriSocket,
  		config: Config{
  			Mode:              GraphicalMode,
@@ -508,11 +553,12 @@ index 687ed8a..1e7b21b 100644
  			ShowFloating:      ShowFloatingAuto,
  			FloatingPosition:  FloatingPositionRight,
  			MinimumSize:       1,
-@@ -71,10 +81,32 @@ func New(niriState *niri.State, niriSocket niri.Socket, queueUpdate func()) *Ins
+@@ -71,10 +95,33 @@ func New(niriState *niri.State, niriSocket niri.Socket, queueUpdate func()) *Ins
  			},
  			WindowRules: []WindowRule{},
  		},
 +		workspaceViews: map[uint64]*workspaceView{},
++		windowContents: map[*gtk.EventBox]*windowContent{},
 +		iconCache:      newIconCache(),
  	}
  }
@@ -541,7 +587,17 @@ index 687ed8a..1e7b21b 100644
  .cffi-niri-windows .tile {
  	background-color: rgba(255, 255, 255, 0.250);
  	transition: background-color 75ms ease-in-out;
-@@ -203,7 +235,8 @@ func (i *Instance) Update() {
+@@ -121,6 +168,9 @@ func (i *Instance) Preinit(root *gtk.Container) error {
+ 	if err != nil {
+ 		return fmt.Errorf("error creating box: %w", err)
+ 	}
++	box.SetHAlign(gtk.ALIGN_START)
++	box.SetHExpand(false)
++	box.SetVExpand(false)
+ 	root.Add(box)
+ 	i.box = box
+ 
+@@ -203,7 +253,8 @@ func (i *Instance) Update() {
  	}
  
  	if i.config.Mode == TextMode {
@@ -551,7 +607,7 @@ index 687ed8a..1e7b21b 100644
  
  		if text == "" {
  			if i.label != nil {
-@@ -226,204 +259,329 @@ func (i *Instance) Update() {
+@@ -226,204 +277,643 @@ func (i *Instance) Update() {
  		return
  	}
  
@@ -603,35 +659,26 @@ index 687ed8a..1e7b21b 100644
  	}
  
 -	var cols *gtk.Box
-+	for id, view := range i.workspaceViews {
-+		if _, ok := activeViews[id]; ok {
-+			continue
-+		}
-+		view.root.Destroy()
-+		delete(i.workspaceViews, id)
-+	}
- 
+-
 -	if len(tiled) != 0 {
 -		cols, _ = gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, i.config.Spacing)
 -		i.box.Add(cols)
-+	i.box.ShowAll()
-+}
- 
+-
 -		for _, column := range columns {
 -			colBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, i.config.Spacing)
 -			colStyle, _ := colBox.GetStyleContext()
 -			colStyle.AddClass("column")
 -			cols.Add(colBox)
-+func (i *Instance) textOutput() string {
-+	if i.config.WorkspaceScope != WorkspaceScopeAll {
-+		return i.niriState.Text(i.monitor, i.config.Symbols)
++	for id, view := range i.workspaceViews {
++		if _, ok := activeViews[id]; ok {
++			continue
++		}
++		view.root.Hide()
 +	}
  
 -			windowHeights, width := i.calculateWindowSizes(column, scale, maxHeight-i.config.ColumnBorders)
-+	workspaces := i.niriState.WorkspaceWindows(i.monitor, true)
-+	if len(workspaces) == 0 {
-+		return i.config.Symbols.Empty
-+	}
++	i.box.Show()
++}
  
 -			for idx, window := range column {
 -				if idx > len(windowHeights)-1 {
@@ -639,16 +686,17 @@ index 687ed8a..1e7b21b 100644
 -					break
 -				}
 -				height := windowHeights[idx]
-+	parts := make([]string, 0, len(workspaces))
-+	for _, workspace := range workspaces {
-+		count := len(workspace.Tiled) + len(workspace.Floating)
-+		parts = append(parts, fmt.Sprintf("%d:%d", workspace.Workspace.Index, count))
++func (i *Instance) textOutput() string {
++	if i.config.WorkspaceScope != WorkspaceScopeAll {
++		return i.niriState.Text(i.monitor, i.config.Symbols)
 +	}
  
 -				windowBox, _ := gtk.EventBoxNew()
 -				windowBox.SetSizeRequest(width, height)
-+	return strings.Join(parts, " | ")
-+}
++	workspaces := i.niriState.WorkspaceWindows(i.monitor, true)
++	if len(workspaces) == 0 {
++		return i.config.Symbols.Empty
++	}
  
 -				style, _ := windowBox.GetStyleContext()
 -				style.AddClass("tile")
@@ -661,39 +709,79 @@ index 687ed8a..1e7b21b 100644
 -					windowBox.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
 -					colBox.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
 -				}
-+func (i *Instance) clearWorkspaceViews() {
-+	for id, view := range i.workspaceViews {
-+		view.root.Destroy()
-+		delete(i.workspaceViews, id)
++	parts := make([]string, 0, len(workspaces))
++	for _, workspace := range workspaces {
++		count := len(workspace.Tiled) + len(workspace.Floating)
++		parts = append(parts, fmt.Sprintf("%d:%d", workspace.Workspace.Index, count))
 +	}
-+}
  
 -				i.connectRealize(windowBox)
 -				i.connectButtonPress(windowBox, window)
 -				i.connectTooltip(windowBox, window)
 -				i.connectHover(windowBox)
 -				i.applyWindowRules(windowBox, window, len(column) == 1 || i.config.IconMinSize > 0)
-+func (i *Instance) ensureWorkspaceView(workspaceID uint64) *workspaceView {
-+	if view, ok := i.workspaceViews[workspaceID]; ok {
-+		return view
-+	}
++	return strings.Join(parts, " | ")
++}
  
 -				colBox.Add(windowBox)
 -			}
-+	root, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, i.config.Spacing)
-+	label, _ := gtk.LabelNew("")
-+	content, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, i.config.Spacing)
++func (i *Instance) clearWorkspaceViews() {
++	for _, view := range i.workspaceViews {
++		view.root.Hide()
++	}
++}
  
 -		}
--	}
-+	root.Add(label)
-+	root.Add(content)
++func (i *Instance) ensureWorkspaceView(workspaceID uint64) *workspaceView {
++	if view, ok := i.workspaceViews[workspaceID]; ok {
++		return view
+ 	}
  
 -	if i.config.FloatingPosition == FloatingPositionRight {
 -		i.drawFloating(maxWidth, maxHeight, floating, scale)
 -		if cols != nil {
 -			i.box.ReorderChild(cols, 0)
 -		}
++	root, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, i.config.Spacing)
++	label, _ := gtk.LabelNew("")
++	content, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, i.config.Spacing)
++	columns, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, i.config.Spacing)
++	floatingView, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 1)
++	floatingFixed, _ := gtk.FixedNew()
++	empty := i.buildEmptyWorkspace(i.config.MinimumSize)
++
++	root.Add(label)
++	root.Add(content)
++	content.Add(columns)
++	content.Add(floatingView)
++	content.Add(empty)
++	content.Show()
++
++	root.SetHAlign(gtk.ALIGN_START)
++	root.SetHExpand(false)
++	root.SetVExpand(false)
++
++	label.SetHAlign(gtk.ALIGN_START)
++	label.SetHExpand(false)
++
++	content.SetHAlign(gtk.ALIGN_START)
++	content.SetHExpand(false)
++	content.SetVExpand(false)
++
++	columns.SetHAlign(gtk.ALIGN_START)
++	columns.SetHExpand(false)
++	columns.SetVExpand(false)
++
++	floatingView.SetName(floatingViewName)
++	floatingView.Add(floatingFixed)
++	floatingView.SetHAlign(gtk.ALIGN_START)
++	floatingView.SetHExpand(false)
++	floatingView.SetVExpand(false)
++
++	empty.SetHAlign(gtk.ALIGN_START)
++	empty.SetHExpand(false)
++	empty.SetVExpand(false)
++
 +	rootStyle, _ := root.GetStyleContext()
 +	rootStyle.AddClass("workspace")
 +
@@ -703,10 +791,23 @@ index 687ed8a..1e7b21b 100644
 +	contentStyle, _ := content.GetStyleContext()
 +	contentStyle.AddClass("workspace-content")
 +
++	columnsStyle, _ := columns.GetStyleContext()
++	columnsStyle.AddClass("workspace-columns")
++
++	floatingStyle, _ := floatingView.GetStyleContext()
++	floatingStyle.AddClass("floating")
++
 +	view := &workspaceView{
-+		root:    root,
-+		label:   label,
-+		content: content,
++		root:          root,
++		label:         label,
++		content:       content,
++		columns:       columns,
++		floatingView:  floatingView,
++		floatingFixed: floatingFixed,
++		empty:         empty,
++		columnViews:   map[uint32]*gtk.Box{},
++		windowBoxes:   map[uint64]*gtk.EventBox{},
++		windowParents: map[uint64]string{},
  	}
 +	i.workspaceViews[workspaceID] = view
 +	i.box.Add(root)
@@ -740,6 +841,10 @@ index 687ed8a..1e7b21b 100644
 +	scale float64,
 +) {
 +	view.root.SetName(fmt.Sprintf("workspace-%d", workspace.Workspace.Index))
++	view.root.SetSpacing(i.config.Spacing)
++	view.content.SetSpacing(i.config.Spacing)
++	view.columns.SetSpacing(i.config.Spacing)
++	view.root.Show()
 +
 +	rootStyle, _ := view.root.GetStyleContext()
 +	setStyleClass(rootStyle, "active", workspace.Workspace.IsActive)
@@ -781,34 +886,53 @@ index 687ed8a..1e7b21b 100644
 -		i.floatingView.SetName(floatingViewName)
 -		i.floatingView.SetSizeRequest(maxWidth, maxHeight)
 -		i.box.Add(i.floatingView)
-+	view.content.GetChildren().Foreach(func(child any) {
-+		child.(*gtk.Widget).Destroy()
-+	})
++	hasFloating := i.renderFloatingView(view, workspace.Floating, maxWidth, maxHeight, scale)
++	hasColumns := i.renderColumnsView(view, workspace.Tiled, maxHeight, scale)
  
 -		style, _ := i.floatingView.GetStyleContext()
 -		style.AddClass("floating")
-+	var added bool
 +	if i.config.FloatingPosition == FloatingPositionLeft {
-+		if floatingView := i.buildFloatingView(workspace.Floating, maxWidth, maxHeight, scale); floatingView != nil {
-+			view.content.Add(floatingView)
-+			added = true
-+		}
++		view.content.ReorderChild(view.floatingView, 0)
++		view.content.ReorderChild(view.columns, 1)
++		view.content.ReorderChild(view.empty, 2)
++	} else {
++		view.content.ReorderChild(view.columns, 0)
++		view.content.ReorderChild(view.floatingView, 1)
++		view.content.ReorderChild(view.empty, 2)
 +	}
  
 -		i.floatingFixed, _ = gtk.FixedNew()
 -		i.floatingFixed.SetSizeRequest(maxWidth, maxHeight)
 -		i.floatingView.Add(i.floatingFixed)
-+	if cols := i.buildColumnsView(workspace.Tiled, maxHeight, scale); cols != nil {
-+		view.content.Add(cols)
-+		added = true
++	if hasFloating || hasColumns {
++		view.empty.Hide()
++		return
  	}
  
 -	hasFocused := false
-+	if i.config.FloatingPosition == FloatingPositionRight {
-+		if floatingView := i.buildFloatingView(workspace.Floating, maxWidth, maxHeight, scale); floatingView != nil {
-+			view.content.Add(floatingView)
-+			added = true
++	if i.config.WorkspaceScope == WorkspaceScopeAll {
++		view.empty.Hide()
++		return
++	}
++
++	view.empty.SetSizeRequest(max(i.config.MinimumSize*2, 6), max(1, maxHeight-i.config.ColumnBorders))
++	view.empty.Show()
++}
++
++func (i *Instance) renderColumnsView(view *workspaceView, tiled []*niri.Window, maxHeight int, scale float64) bool {
++	filtered := make([]*niri.Window, 0, len(tiled))
++	for _, window := range tiled {
++		if window.Layout.PosInScrollingLayout == nil {
++			continue
 +		}
++		filtered = append(filtered, window)
++	}
++	if len(filtered) == 0 {
++		view.columns.Hide()
++		for _, colBox := range view.columnViews {
++			colBox.Hide()
++		}
++		return false
 +	}
  
 -	existingWindows := make(map[string]struct{})
@@ -820,17 +944,251 @@ index 687ed8a..1e7b21b 100644
 -			if id == strconv.FormatUint(w.Id, 10) {
 -				existingWindows[id] = struct{}{}
 -				window = w
-+	if !added {
-+		view.content.Add(i.buildEmptyWorkspace(maxHeight))
++	columns := groupBy(filtered, func(w *niri.Window) uint32 {
++		return w.Layout.PosInScrollingLayout.X
++	})
++	slices.SortFunc(columns, func(a, b []*niri.Window) int {
++		return int(a[0].Layout.PosInScrollingLayout.X) - int(b[0].Layout.PosInScrollingLayout.X)
++	})
++
++	activeColumns := make(map[uint32]struct{}, len(columns))
++	for colIdx, column := range columns {
++		columnID := column[0].Layout.PosInScrollingLayout.X
++		colBox := i.ensureColumnView(view, columnID)
++		colBox.SetSpacing(i.config.Spacing)
++		colBox.Show()
++		view.columns.ReorderChild(colBox, colIdx)
++
++		windowHeights, width := i.calculateWindowSizes(column, scale, maxHeight-i.config.ColumnBorders)
++		activeWindows := make(map[uint64]struct{}, len(column))
++		hasFocused := false
++		for idx, window := range column {
++			if idx >= len(windowHeights) {
+ 				break
+ 			}
++
++			windowBox := i.ensureWindowBox(view, window)
++			if windowBox == nil {
++				continue
++			}
++
++			i.attachWindowToBox(view, window.Id, windowBox, fmt.Sprintf("column:%d", columnID), colBox, idx)
++			i.updateWindowBox(windowBox, window, width, windowHeights[idx], len(column) == 1 || i.config.IconMinSize > 0)
++			windowBox.Show()
++
++			activeWindows[window.Id] = struct{}{}
++			if window.IsFocused {
++				hasFocused = true
++			}
+ 		}
+ 
+-		if window == nil {
+-			windowBox.Destroy()
+-			return
++		if hasFocused {
++			colBox.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
++		} else {
++			colBox.UnsetStateFlags(gtk.STATE_FLAG_ACTIVE)
+ 		}
+ 
+-		x, y, w, h := i.getFloatingLayout(window, scale, maxWidth, maxHeight)
+-		i.floatingFixed.Move(windowBox, x, y)
+-		windowBox.SetSizeRequest(w, h)
++		colBox.GetChildren().Foreach(func(child any) {
++			widget := child.(*gtk.Widget)
++			name, nameErr := widget.GetName()
++			id, err := strconv.ParseUint(name, 10, 64)
++			if nameErr == nil && err == nil {
++				if _, ok := activeWindows[id]; ok {
++					return
++				}
++			}
++			widget.Hide()
++		})
++
++		activeColumns[columnID] = struct{}{}
 +	}
++
++	for columnID, colBox := range view.columnViews {
++		if _, ok := activeColumns[columnID]; ok {
++			continue
++		}
++		colBox.Hide()
++	}
++
++	view.columns.Show()
++	return true
++}
++
++func (i *Instance) renderFloatingView(
++	view *workspaceView,
++	floating []*niri.Window,
++	maxWidth int,
++	maxHeight int,
++	scale float64,
++) bool {
++	filtered := make([]*niri.Window, 0, len(floating))
++	for _, window := range floating {
++		if window.Layout.TilePosInWorkspaceView == nil {
++			continue
++		}
++		filtered = append(filtered, window)
++	}
++	if !i.shouldShowFloating(filtered) {
++		view.floatingView.Hide()
++		view.floatingFixed.GetChildren().Foreach(func(child any) {
++			child.(*gtk.Widget).Hide()
++		})
++		return false
++	}
++
++	maxHeight -= i.config.FloatingBorders
++	maxWidth -= i.config.FloatingBorders
++	maxHeight = max(maxHeight, 1)
++	maxWidth = max(maxWidth, 1)
+ 
+-		style, _ := windowBox.GetStyleContext()
+-		if window.IsUrgent && !style.HasClass("urgent") {
+-			style.AddClass("urgent")
+-		} else if !window.IsUrgent && style.HasClass("urgent") {
+-			style.RemoveClass("urgent")
++	view.floatingView.SetSizeRequest(maxWidth, maxHeight)
++	view.floatingFixed.SetSizeRequest(maxWidth, maxHeight)
++
++	activeWindows := make(map[uint64]struct{}, len(filtered))
++	hasFocused := false
++	for _, window := range filtered {
++		x, y, w, h := i.getFloatingLayout(window, scale, maxWidth, maxHeight)
++		windowBox := i.ensureWindowBox(view, window)
++		if windowBox == nil {
++			continue
+ 		}
+ 
+-		i.applyWindowRules(windowBox, window, i.config.IconMinSize > 0)
++		i.attachWindowToFixed(view, window.Id, windowBox, x, y)
++		i.updateWindowBox(windowBox, window, w, h, i.config.IconMinSize > 0)
++		windowBox.Show()
++
++		activeWindows[window.Id] = struct{}{}
+ 		if window.IsFocused {
+-			windowBox.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
+ 			hasFocused = true
+-		} else {
+-			windowBox.UnsetStateFlags(gtk.STATE_FLAG_ACTIVE)
+ 		}
++	}
++
++	view.floatingFixed.GetChildren().Foreach(func(child any) {
++		widget := child.(*gtk.Widget)
++		name, nameErr := widget.GetName()
++		id, err := strconv.ParseUint(name, 10, 64)
++		if nameErr == nil && err == nil {
++			if _, ok := activeWindows[id]; ok {
++				return
++			}
++		}
++		widget.Hide()
+ 	})
+ 
+-	for _, window := range floating {
+-		id := strconv.FormatUint(window.Id, 10)
+-		if _, ok := existingWindows[id]; ok {
++	if hasFocused {
++		view.floatingView.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
++	} else {
++		view.floatingView.UnsetStateFlags(gtk.STATE_FLAG_ACTIVE)
++	}
++
++	view.floatingView.Show()
++	return true
++}
++
++func (i *Instance) ensureColumnView(view *workspaceView, columnID uint32) *gtk.Box {
++	if colBox, ok := view.columnViews[columnID]; ok {
++		return colBox
++	}
++
++	colBox, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, i.config.Spacing)
++	colStyle, _ := colBox.GetStyleContext()
++	colStyle.AddClass("column")
++	view.columns.Add(colBox)
++	view.columnViews[columnID] = colBox
++	return colBox
++}
++
++func (i *Instance) ensureWindowBox(view *workspaceView, window *niri.Window) *gtk.EventBox {
++	if windowBox, ok := view.windowBoxes[window.Id]; ok {
++		return windowBox
++	}
++
++	windowBox := i.buildWindowBox(window, i.config.MinimumSize, i.config.MinimumSize, false)
++	if windowBox == nil {
++		return nil
++	}
++
++	view.windowBoxes[window.Id] = windowBox
++	return windowBox
++}
++
++func (i *Instance) updateWindowBox(windowBox *gtk.EventBox, window *niri.Window, width int, height int, showIcon bool) {
++	windowBox.SetName(strconv.FormatUint(window.Id, 10))
++	windowBox.SetSizeRequest(width, height)
++
++	style, _ := windowBox.GetStyleContext()
++	setStyleClass(style, "tile", true)
++	setStyleClass(style, "urgent", window.IsUrgent)
++	if window.IsFocused {
++		windowBox.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
++	} else {
++		windowBox.UnsetStateFlags(gtk.STATE_FLAG_ACTIVE)
++	}
++
++	i.applyWindowRules(windowBox, window, showIcon)
++}
++
++func (i *Instance) attachWindowToBox(
++	view *workspaceView,
++	windowID uint64,
++	windowBox *gtk.EventBox,
++	parentKey string,
++	parent *gtk.Box,
++	position int,
++) {
++	if view.windowParents[windowID] != parentKey {
++		removeFromParent(windowBox)
++		parent.Add(windowBox)
++		view.windowParents[windowID] = parentKey
++	}
++	parent.ReorderChild(windowBox, position)
++}
++
++func (i *Instance) attachWindowToFixed(view *workspaceView, windowID uint64, windowBox *gtk.EventBox, x int, y int) {
++	if view.windowParents[windowID] != floatingViewName {
++		removeFromParent(windowBox)
++		view.floatingFixed.Put(windowBox, x, y)
++		view.windowParents[windowID] = floatingViewName
++		return
++	}
++
++	view.floatingFixed.Move(windowBox, x, y)
++}
++
++func removeFromParent(widget gtk.IWidget) {
++	parent, err := widget.ToWidget().GetParent()
++	if err != nil || parent == nil {
++		return
++	}
++
++	container := &gtk.Container{Widget: *parent.ToWidget()}
++	container.Remove(widget)
 +}
 +
 +func (i *Instance) buildColumnsView(tiled []*niri.Window, maxHeight int, scale float64) *gtk.Box {
 +	filtered := make([]*niri.Window, 0, len(tiled))
 +	for _, window := range tiled {
 +		if window.Layout.PosInScrollingLayout == nil {
-+			continue
-+		}
+ 			continue
+ 		}
 +		filtered = append(filtered, window)
 +	}
 +	if len(filtered) == 0 {
@@ -854,14 +1212,9 @@ index 687ed8a..1e7b21b 100644
 +		windowHeights, width := i.calculateWindowSizes(column, scale, maxHeight-i.config.ColumnBorders)
 +		for idx, window := range column {
 +			if idx >= len(windowHeights) {
- 				break
- 			}
--		}
- 
--		if window == nil {
--			windowBox.Destroy()
--			return
--		}
++				break
++			}
++
 +			windowBox := i.buildWindowBox(
 +				window,
 +				width,
@@ -874,31 +1227,20 @@ index 687ed8a..1e7b21b 100644
 +			if window.IsFocused {
 +				colBox.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
 +			}
- 
--		x, y, w, h := i.getFloatingLayout(window, scale, maxWidth, maxHeight)
--		i.floatingFixed.Move(windowBox, x, y)
--		windowBox.SetSizeRequest(w, h)
--
--		style, _ := windowBox.GetStyleContext()
--		if window.IsUrgent && !style.HasClass("urgent") {
--			style.AddClass("urgent")
--		} else if !window.IsUrgent && style.HasClass("urgent") {
--			style.RemoveClass("urgent")
++
 +			colBox.Add(windowBox)
- 		}
++		}
 +	}
  
--		i.applyWindowRules(windowBox, window, i.config.IconMinSize > 0)
--		if window.IsFocused {
--			windowBox.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
--			hasFocused = true
--		} else {
--			windowBox.UnsetStateFlags(gtk.STATE_FLAG_ACTIVE)
--		}
--	})
+-		windowBox, _ := gtk.EventBoxNew()
+-		windowBox.SetName(id)
 +	return cols
 +}
  
+-		style, _ := windowBox.GetStyleContext()
+-		style.AddClass("tile")
+-		if window.IsUrgent {
+-			style.AddClass("urgent")
 +func (i *Instance) buildFloatingView(
 +	floating []*niri.Window,
 +	maxWidth int,
@@ -906,11 +1248,9 @@ index 687ed8a..1e7b21b 100644
 +	scale float64,
 +) *gtk.Box {
 +	filtered := make([]*niri.Window, 0, len(floating))
- 	for _, window := range floating {
--		id := strconv.FormatUint(window.Id, 10)
--		if _, ok := existingWindows[id]; ok {
++	for _, window := range floating {
 +		if window.Layout.TilePosInWorkspaceView == nil {
- 			continue
++			continue
  		}
 +		filtered = append(filtered, window)
 +	}
@@ -918,25 +1258,18 @@ index 687ed8a..1e7b21b 100644
 +		return nil
 +	}
  
--		windowBox, _ := gtk.EventBoxNew()
--		windowBox.SetName(id)
 +	maxHeight -= i.config.FloatingBorders
 +	maxWidth -= i.config.FloatingBorders
 +	maxHeight = max(maxHeight, 1)
 +	maxWidth = max(maxWidth, 1)
- 
--		style, _ := windowBox.GetStyleContext()
--		style.AddClass("tile")
--		if window.IsUrgent {
--			style.AddClass("urgent")
--		}
++
 +	floatingView, _ := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 1)
 +	floatingView.SetName(floatingViewName)
 +	floatingView.SetSizeRequest(maxWidth, maxHeight)
 +
 +	style, _ := floatingView.GetStyleContext()
 +	style.AddClass("floating")
- 
++
 +	fixed, _ := gtk.FixedNew()
 +	fixed.SetSizeRequest(maxWidth, maxHeight)
 +	floatingView.Add(fixed)
@@ -1002,6 +1335,37 @@ index 687ed8a..1e7b21b 100644
 +		windowBox.SetStateFlags(gtk.STATE_FLAG_ACTIVE, false)
 +	}
 +
++	contentBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 0)
++	contentBox.SetHAlign(gtk.ALIGN_CENTER)
++	contentBox.SetVAlign(gtk.ALIGN_CENTER)
++	contentBox.SetHExpand(true)
++	contentBox.SetVExpand(true)
++	contentBox.Show()
++
++	label, _ := gtk.LabelNew("")
++	label.SetHAlign(gtk.ALIGN_CENTER)
++	label.SetVAlign(gtk.ALIGN_CENTER)
++	label.Hide()
++	contentBox.Add(label)
++
++	image, _ := gtk.ImageNew()
++	image.SetHAlign(gtk.ALIGN_CENTER)
++	image.SetVAlign(gtk.ALIGN_CENTER)
++	image.SetHExpand(false)
++	image.SetVExpand(false)
++	if imageStyle, err := image.GetStyleContext(); err == nil {
++		imageStyle.AddClass("app-icon")
++	}
++	image.Hide()
++	contentBox.Add(image)
++
++	windowBox.Add(contentBox)
++	i.windowContents[windowBox] = &windowContent{
++		box:   contentBox,
++		label: label,
++		image: image,
++	}
++
 +	i.connectRealize(windowBox)
 +	i.connectButtonPress(windowBox, window)
 +	i.connectTooltip(windowBox, window)
@@ -1016,21 +1380,51 @@ index 687ed8a..1e7b21b 100644
  }
  
  func (i *Instance) getFloatingLayout(window *niri.Window, scale float64, maxWidth int, maxHeight int) (x int, y int, w int, h int) {
-@@ -482,6 +640,8 @@ func (i *Instance) applyWindowRules(windowBox *gtk.EventBox, window *niri.Window
- 					log.Errorf("error creating label: %s", err)
- 					continue
- 				}
-+				lab.SetHAlign(gtk.ALIGN_CENTER)
-+				lab.SetVAlign(gtk.ALIGN_CENTER)
- 				windowBox.Add(lab)
+@@ -457,10 +947,12 @@ func (i *Instance) getFloatingLayout(window *niri.Window, scale float64, maxWidt
+ 
+ func (i *Instance) applyWindowRules(windowBox *gtk.EventBox, window *niri.Window, showIcon bool) {
+ 	style, _ := windowBox.ToWidget().GetStyleContext()
++	content := i.windowContents[windowBox]
++	if content == nil {
++		return
++	}
++
+ 	iconAdded := false
+-	windowBox.GetChildren().Foreach(func(child any) {
+-		child.(*gtk.Widget).Destroy()
+-	})
+ 
+ 	for _, rule := range i.config.WindowRules {
+ 		appIdMatched := rule.AppId == nil
+@@ -477,12 +969,9 @@ func (i *Instance) applyWindowRules(windowBox *gtk.EventBox, window *niri.Window
+ 			w, h := windowBox.ToWidget().GetSizeRequest()
+ 			meetsMinSizeReq := w >= i.config.IconMinSize && h >= i.config.IconMinSize
+ 			if rule.Icon != "" && !iconAdded && showIcon && meetsMinSizeReq {
+-				lab, err := gtk.LabelNew(rule.Icon)
+-				if err != nil {
+-					log.Errorf("error creating label: %s", err)
+-					continue
+-				}
+-				windowBox.Add(lab)
++				content.label.SetText(rule.Icon)
++				content.label.Show()
++				content.image.Hide()
  				iconAdded = true
  			}
-@@ -492,6 +652,32 @@ func (i *Instance) applyWindowRules(windowBox *gtk.EventBox, window *niri.Window
+ 			if !rule.Continue {
+@@ -492,6 +981,38 @@ func (i *Instance) applyWindowRules(windowBox *gtk.EventBox, window *niri.Window
  			style.RemoveClass(rule.Class)
  		}
  	}
 +
-+	if iconAdded || !showIcon {
++	if iconAdded {
++		return
++	}
++
++	content.label.Hide()
++	content.image.Hide()
++
++	if !showIcon {
 +		return
 +	}
 +
@@ -1049,12 +1443,11 @@ index 687ed8a..1e7b21b 100644
 +		size = min(w, h)
 +	}
 +
-+	image := iconImage(resolvedIcon, windowBox.ToWidget(), size)
-+	if image == nil {
++	if !setIconImage(content.image, resolvedIcon, size) {
 +		return
 +	}
 +
-+	windowBox.Add(image)
++	content.image.Show()
  }
  
  func (*Instance) connectRealize(windowBox gtk.IWidget) {
